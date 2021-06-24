@@ -563,7 +563,7 @@ interface IUniswapV2Router01 {
         uint amountETHMin,
         address to,
         uint deadline
-    ) external payable returns (uint amountToken, uint amountETH, uint liquidity);
+    ) external payable ;
     function removeLiquidity(
         address tokenA,
         address tokenB,
@@ -686,8 +686,8 @@ contract SavePlanetEarth is Context, IERC20, Ownable {
     using SafeMath for uint256;
     using Address for address;
 
-    mapping (address => uint256) private _rOwned;
-    mapping (address => uint256) private _tOwned;
+    mapping (address => uint256) private _reflectOwned;
+    mapping (address => uint256) private _totalOwned;
     mapping (address => mapping (address => uint256)) private _allowances;
 
     mapping (address => bool) private _isExcludedFromFee;
@@ -695,19 +695,19 @@ contract SavePlanetEarth is Context, IERC20, Ownable {
     mapping (address => bool) private _isExcluded;
     address[] private _excluded;
    
-    uint256 private constant _tTotal = 1000000000 * 10**6 * 10**9;
-    uint256 private _rTotal = (~uint256(0) - (~uint256(0) % _tTotal));
+    uint256 private constant _totalSupply = 1000000000 * 10**6 * 10**9;
+    uint256 private _totalReflection = (~uint256(0) - (~uint256(0) % _totalSupply));
     uint256 private _tFeeTotal;
 
     string private constant _name = "SavePlanetEarth";
     string private constant _symbol = "SPE";
     uint8 private constant _decimals = 9;
     
-    uint256 public _taxFee = 2;
-    uint256 private _previousTaxFee = _taxFee;
+    uint256 public _transTaxReflectFee = 2;
+    uint256 private _previousTaxFee = _transTaxReflectFee;
     
-    uint256 public _liquidityFee = 5;
-    uint256 private _previousLiquidityFee = _liquidityFee;
+    uint256 public _transTaxliquidityFee = 5;
+    uint256 private _previousLiquidityFee = _transTaxliquidityFee;
 
     IUniswapV2Router02 public immutable uniswapV2Router;
     address public immutable uniswapV2Pair;
@@ -715,7 +715,7 @@ contract SavePlanetEarth is Context, IERC20, Ownable {
     bool inSwapAndLiquify;
     bool public swapAndLiquifyEnabled = true;
     
-    uint256 public _maxTxAmount = 5000000 * 10**6 * 10**9;
+    uint256 public _maxTaxAmount = 5000000 * 10**6 * 10**9;
     uint256 private immutable numTokensSellToAddToLiquidity = 500000 * 10**6 * 10**9;
     
     event MinTokensBeforeSwapUpdated(uint256 minTokensBeforeSwap);
@@ -733,7 +733,7 @@ contract SavePlanetEarth is Context, IERC20, Ownable {
     }
     
     constructor () public {
-        _rOwned[_msgSender()] = _rTotal;
+        _reflectOwned[_msgSender()] = _totalReflection;
         
         IUniswapV2Router02 _uniswapV2Router = IUniswapV2Router02(0x05fF2B0DB69458A0750badebc4f9e13aDd608C7F);
          // Create a uniswap pair for this new token
@@ -747,7 +747,7 @@ contract SavePlanetEarth is Context, IERC20, Ownable {
         _isExcludedFromFee[owner()] = true;
         _isExcludedFromFee[address(this)] = true;
         
-        emit Transfer(address(0), _msgSender(), _tTotal);
+        emit Transfer(address(0), _msgSender(), _totalSupply);
     }
 
     function name() public view returns (string memory) {
@@ -763,12 +763,12 @@ contract SavePlanetEarth is Context, IERC20, Ownable {
     }
 
     function totalSupply() public view override returns (uint256) {
-        return _tTotal;
+        return _totalSupply;
     }
 
     function balanceOf(address account) public view override returns (uint256) {
-        if (_isExcluded[account]) return _tOwned[account];
-        return tokenFromReflection(_rOwned[account]);
+        if (_isExcluded[account]) return _totalOwned[account];
+        return tokenFromReflection(_reflectOwned[account]);
     }
 
     function transfer(address recipient, uint256 amount) public override returns (bool) {
@@ -779,18 +779,38 @@ contract SavePlanetEarth is Context, IERC20, Ownable {
     function allowance(address owner, address spender) public view override returns (uint256) {
         return _allowances[owner][spender];
     }
-
+ 
     function approve(address spender, uint256 amount) public override returns (bool) {
         _approve(_msgSender(), spender, amount);
         return true;
     }
 
+ 
+    function increaseApproval(address _spender, uint _addedValue) public returns (bool) {
+        _allowances[msg.sender][_spender] = _allowances[msg.sender][_spender].add(_addedValue);
+        emit Approval(msg.sender, _spender, allowed[msg.sender][_spender]);
+        return true;
+    }
+    
+ 
+    function decreaseApproval(address _spender, uint _subtractedValue) public returns (bool) {
+        uint oldValue = allowed[msg.sender][_spender];
+        if (_subtractedValue > oldValue) {
+            _allowances[msg.sender][_spender] = 0;
+        } else {
+            _allowances[msg.sender][_spender] = oldValue.sub(_subtractedValue);
+        }
+        emit Approval(msg.sender, _spender, _allowances[msg.sender][_spender]);
+        return true;
+    }
+    
     function transferFrom(address sender, address recipient, uint256 amount) public override returns (bool) {
         _transfer(sender, recipient, amount);
         _approve(sender, _msgSender(), _allowances[sender][_msgSender()].sub(amount, "ERC20: transfer amount exceeds allowance"));
         return true;
     }
 
+ 
     function increaseAllowance(address spender, uint256 addedValue) public virtual returns (bool) {
         _approve(_msgSender(), spender, _allowances[_msgSender()][spender].add(addedValue));
         return true;
@@ -813,13 +833,13 @@ contract SavePlanetEarth is Context, IERC20, Ownable {
         address sender = _msgSender();
         require(!_isExcluded[sender], "Excluded addresses cannot call this function");
         (uint256 rAmount,,,,,) = _getValues(tAmount);
-        _rOwned[sender] = _rOwned[sender].sub(rAmount);
-        _rTotal = _rTotal.sub(rAmount);
+        _reflectOwned[sender] = _reflectOwned[sender].sub(rAmount);
+        _totalReflection = _totalReflection.sub(rAmount);
         _tFeeTotal = _tFeeTotal.add(tAmount);
     }
 
     function reflectionFromToken(uint256 tAmount, bool deductTransferFee) public view returns(uint256) {
-        require(tAmount <= _tTotal, "Amount must be less than supply");
+        require(tAmount <= _totalSupply, "Amount must be less than supply");
         if (!deductTransferFee) {
             (uint256 rAmount,,,,,) = _getValues(tAmount);
             return rAmount;
@@ -830,7 +850,7 @@ contract SavePlanetEarth is Context, IERC20, Ownable {
     }
 
     function tokenFromReflection(uint256 rAmount) public view returns(uint256) {
-        require(rAmount <= _rTotal, "Amount must be less than total reflections");
+        require(rAmount <= _totalReflection, "Amount must be less than total reflections");
         uint256 currentRate =  _getRate();
         return rAmount.div(currentRate);
     }
@@ -838,19 +858,20 @@ contract SavePlanetEarth is Context, IERC20, Ownable {
     function excludeFromReward(address account) public onlyOwner() {
         // require(account != 0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D, 'We can not exclude Uniswap router.');
         require(!_isExcluded[account], "Account is already excluded");
-        if(_rOwned[account] > 0) {
-            _tOwned[account] = tokenFromReflection(_rOwned[account]);
+        if(_reflectOwned[account] > 0) {
+            _totalOwned[account] = tokenFromReflection(_reflectOwned[account]);
         }
         _isExcluded[account] = true;
         _excluded.push(account);
     }
 
     function includeInReward(address account) external onlyOwner() {
-        require(_isExcluded[account], "Account is not excluded");
-        for (uint256 i = 0; i < _excluded.length; i++) {
+        require(_isExcluded[account], "Account is already excluded");
+        uint256 length = _excluded.length;
+        for (uint256 i = 0; i < length; i++) {
             if (_excluded[i] == account) {
-                _excluded[i] = _excluded[_excluded.length - 1];
-                _tOwned[account] = 0;
+                _excluded[i] = _excluded[length - 1];
+                _totalOwned[account] = 0;
                 _isExcluded[account] = false;
                 _excluded.pop();
                 break;
@@ -859,10 +880,10 @@ contract SavePlanetEarth is Context, IERC20, Ownable {
     }
         function _transferBothExcluded(address sender, address recipient, uint256 tAmount) private {
         (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tLiquidity) = _getValues(tAmount);
-        _tOwned[sender] = _tOwned[sender].sub(tAmount);
-        _rOwned[sender] = _rOwned[sender].sub(rAmount);
-        _tOwned[recipient] = _tOwned[recipient].add(tTransferAmount);
-        _rOwned[recipient] = _rOwned[recipient].add(rTransferAmount);        
+        _totalOwned[sender] = _totalOwned[sender].sub(tAmount);
+        _reflectOwned[sender] = _reflectOwned[sender].sub(rAmount);
+        _totalOwned[recipient] = _totalOwned[recipient].add(tTransferAmount);
+        _reflectOwned[recipient] = _reflectOwned[recipient].add(rTransferAmount);        
         _takeLiquidity(tLiquidity);
         _reflectFee(rFee, tFee);
         emit Transfer(sender, recipient, tTransferAmount);
@@ -877,15 +898,15 @@ contract SavePlanetEarth is Context, IERC20, Ownable {
     }
     
     function setTaxFeePercent(uint256 taxFee) external onlyOwner() {
-        _taxFee = taxFee;
+        _transTaxReflectFee = taxFee;
     }
     
     function setLiquidityFeePercent(uint256 liquidityFee) external onlyOwner() {
-        _liquidityFee = liquidityFee;
+        _transTaxliquidityFee = liquidityFee;
     }
    
     function setMaxTxPercent(uint256 maxTxPercent) external onlyOwner() {
-        _maxTxAmount = _tTotal.mul(maxTxPercent).div(
+        _maxTaxAmount = _totalSupply.mul(maxTxPercent).div(
             10**2
         );
     }
@@ -899,7 +920,7 @@ contract SavePlanetEarth is Context, IERC20, Ownable {
     receive() external payable {}
 
     function _reflectFee(uint256 rFee, uint256 tFee) private {
-        _rTotal = _rTotal.sub(rFee);
+        _totalReflection = _totalReflection.sub(rFee);
         _tFeeTotal = _tFeeTotal.add(tFee);
     }
 
@@ -930,50 +951,50 @@ contract SavePlanetEarth is Context, IERC20, Ownable {
     }
 
     function _getCurrentSupply() private view returns(uint256, uint256) {
-        uint256 rSupply = _rTotal;
-        uint256 tSupply = _tTotal;      
+        uint256 rSupply = _totalReflection;
+        uint256 tSupply = _totalSupply;      
         for (uint256 i = 0; i < _excluded.length; i++) {
-            if (_rOwned[_excluded[i]] > rSupply || _tOwned[_excluded[i]] > tSupply) return (_rTotal, _tTotal);
-            rSupply = rSupply.sub(_rOwned[_excluded[i]]);
-            tSupply = tSupply.sub(_tOwned[_excluded[i]]);
+            if (_reflectOwned[_excluded[i]] > rSupply || _totalOwned[_excluded[i]] > tSupply) return (_totalReflection, _totalSupply);
+            rSupply = rSupply.sub(_reflectOwned[_excluded[i]]);
+            tSupply = tSupply.sub(_totalOwned[_excluded[i]]);
         }
-        if (rSupply < _rTotal.div(_tTotal)) return (_rTotal, _tTotal);
+        if (rSupply < _totalReflection.div(_totalSupply)) return (_totalReflection, _totalSupply);
         return (rSupply, tSupply);
     }
     
     function _takeLiquidity(uint256 tLiquidity) private {
         uint256 currentRate =  _getRate();
         uint256 rLiquidity = tLiquidity.mul(currentRate);
-        _rOwned[address(this)] = _rOwned[address(this)].add(rLiquidity);
+        _reflectOwned[address(this)] = _reflectOwned[address(this)].add(rLiquidity);
         if(_isExcluded[address(this)])
-            _tOwned[address(this)] = _tOwned[address(this)].add(tLiquidity);
+            _totalOwned[address(this)] = _totalOwned[address(this)].add(tLiquidity);
     }
     
     function calculateTaxFee(uint256 _amount) private view returns (uint256) {
-        return _amount.mul(_taxFee).div(
+        return _amount.mul(_transTaxReflectFee).div(
             10**2
         );
     }
 
     function calculateLiquidityFee(uint256 _amount) private view returns (uint256) {
-        return _amount.mul(_liquidityFee).div(
+        return _amount.mul(_transTaxliquidityFee).div(
             10**2
         );
     }
     
     function removeAllFee() private {
-        if(_taxFee == 0 && _liquidityFee == 0) return;
+        if(_transTaxReflectFee == 0 && _transTaxliquidityFee == 0) return;
         
-        _previousTaxFee = _taxFee;
-        _previousLiquidityFee = _liquidityFee;
+        _previousTaxFee = _transTaxReflectFee;
+        _previousLiquidityFee = _transTaxliquidityFee;
         
-        _taxFee = 0;
-        _liquidityFee = 0;
+        _transTaxReflectFee = 0;
+        _transTaxliquidityFee = 0;
     }
     
     function restoreAllFee() private {
-        _taxFee = _previousTaxFee;
-        _liquidityFee = _previousLiquidityFee;
+        _transTaxReflectFee = _previousTaxFee;
+        _transTaxliquidityFee = _previousLiquidityFee;
     }
     
     function isExcludedFromFee(address account) public view returns(bool) {
@@ -984,6 +1005,7 @@ contract SavePlanetEarth is Context, IERC20, Ownable {
         require(owner != address(0), "ERC20: approve from the zero address");
         require(spender != address(0), "ERC20: approve to the zero address");
 
+       
         _allowances[owner][spender] = amount;
         emit Approval(owner, spender, amount);
     }
@@ -997,7 +1019,7 @@ contract SavePlanetEarth is Context, IERC20, Ownable {
         require(to != address(0), "ERC20: transfer to the zero address");
         require(amount > 0, "Transfer amount must be greater than zero");
         if(from != owner() && to != owner())
-            require(amount <= _maxTxAmount, "Transfer amount exceeds the maxTxAmount.");
+            require(amount <= _maxTaxAmount, "Transfer amount exceeds the maxTxAmount.");
 
         // is the token balance of this contract address over the min number of
         // tokens that we need to initiate a swap + liquidity lock?
@@ -1005,9 +1027,9 @@ contract SavePlanetEarth is Context, IERC20, Ownable {
         // also, don't swap & liquify if sender is uniswap pair.
         uint256 contractTokenBalance = balanceOf(address(this));
         
-        if(contractTokenBalance >= _maxTxAmount)
+        if(contractTokenBalance >= _maxTaxAmount)
         {
-            contractTokenBalance = _maxTxAmount;
+            contractTokenBalance = _maxTaxAmount;
         }
         
         bool overMinTokenBalance = contractTokenBalance >= numTokensSellToAddToLiquidity;
@@ -1111,8 +1133,8 @@ contract SavePlanetEarth is Context, IERC20, Ownable {
 
     function _transferStandard(address sender, address recipient, uint256 tAmount) private {
         (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tLiquidity) = _getValues(tAmount);
-        _rOwned[sender] = _rOwned[sender].sub(rAmount);
-        _rOwned[recipient] = _rOwned[recipient].add(rTransferAmount);
+        _reflectOwned[sender] = _reflectOwned[sender].sub(rAmount);
+        _reflectOwned[recipient] = _reflectOwned[recipient].add(rTransferAmount);
         _takeLiquidity(tLiquidity);
         _reflectFee(rFee, tFee);
         emit Transfer(sender, recipient, tTransferAmount);
@@ -1120,9 +1142,9 @@ contract SavePlanetEarth is Context, IERC20, Ownable {
 
     function _transferToExcluded(address sender, address recipient, uint256 tAmount) private {
         (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tLiquidity) = _getValues(tAmount);
-        _rOwned[sender] = _rOwned[sender].sub(rAmount);
-        _tOwned[recipient] = _tOwned[recipient].add(tTransferAmount);
-        _rOwned[recipient] = _rOwned[recipient].add(rTransferAmount);           
+        _reflectOwned[sender] = _reflectOwned[sender].sub(rAmount);
+        _totalOwned[recipient] = _totalOwned[recipient].add(tTransferAmount);
+        _reflectOwned[recipient] = _reflectOwned[recipient].add(rTransferAmount);           
         _takeLiquidity(tLiquidity);
         _reflectFee(rFee, tFee);
         emit Transfer(sender, recipient, tTransferAmount);
@@ -1130,9 +1152,9 @@ contract SavePlanetEarth is Context, IERC20, Ownable {
 
     function _transferFromExcluded(address sender, address recipient, uint256 tAmount) private {
         (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tLiquidity) = _getValues(tAmount);
-        _tOwned[sender] = _tOwned[sender].sub(tAmount);
-        _rOwned[sender] = _rOwned[sender].sub(rAmount);
-        _rOwned[recipient] = _rOwned[recipient].add(rTransferAmount);   
+        _totalOwned[sender] = _totalOwned[sender].sub(tAmount);
+        _reflectOwned[sender] = _reflectOwned[sender].sub(rAmount);
+        _reflectOwned[recipient] = _reflectOwned[recipient].add(rTransferAmount);   
         _takeLiquidity(tLiquidity);
         _reflectFee(rFee, tFee);
         emit Transfer(sender, recipient, tTransferAmount);
